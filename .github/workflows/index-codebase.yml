@@ -1,0 +1,42 @@
+# snow-cuffs · CI indexing
+# Re-syncs this repo's code into the Cortex Search corpus on merge to main.
+# Copy this workflow into each repo you want indexed (change --repo).
+#
+# Cost note: runs only on main-branch pushes, and upsert.py only writes
+# changed chunks, so embedding spend tracks your merge volume, not repo size.
+#
+# Secrets required: SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PRIVATE_KEY
+# (key-pair auth for a dedicated CI service user with write access to
+# SNOWCUFFS.CODE_INDEX only).
+
+name: Index codebase into Cortex Search
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: cortex-index-${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  index:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install indexer deps
+        run: pip install -r indexer/requirements.txt
+
+      - name: Sync chunks to Snowflake
+        env:
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+          SNOWFLAKE_WAREHOUSE: SNOWCUFFS_WH
+        run: python indexer/upsert.py --repo "${{ github.repository }}" --root .
