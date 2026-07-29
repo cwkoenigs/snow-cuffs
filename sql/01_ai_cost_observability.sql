@@ -58,26 +58,66 @@ FROM AI_FUNCTION_SPEND_BY_QUERY
 GROUP BY 1, 2;
 
 -- ----------------------------------------------------------------------------
--- Cortex Code (CoCo) CLI + desktop sessions: this is your agent spend.
--- TOKEN_CREDITS aggregates per user let you spot context-stuffing sessions.
+-- Cortex Code (CoCo) across ALL surfaces: CLI, desktop app, and Snowsight.
+-- This is your agent spend; per-user TOKEN_CREDITS aggregates let you spot
+-- context-stuffing sessions.
+-- Note: Snowsight CoCo is not token-billed at time of writing, but keep it in
+-- the rollup anyway — pricing changes, and usage volume there is still a
+-- behavioral signal. These views are new and evolving; if a column errors,
+-- DESC VIEW SNOWFLAKE.ACCOUNT_USAGE.<name> and adjust (e.g. some releases
+-- expose USER_ID rather than USER_NAME).
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE VIEW COCO_SPEND_DAILY AS
 SELECT usage_date, surface, user_name, token_credits
 FROM (
-    SELECT DATE_TRUNC('day', start_time) AS usage_date,
+    SELECT DATE_TRUNC('day', usage_time) AS usage_date,
            'cli'                         AS surface,
            user_name,
            SUM(token_credits)            AS token_credits
     FROM SNOWFLAKE.ACCOUNT_USAGE.CORTEX_CODE_CLI_USAGE_HISTORY
     GROUP BY 1, 3
     UNION ALL
-    SELECT DATE_TRUNC('day', start_time) AS usage_date,
+    SELECT DATE_TRUNC('day', usage_time) AS usage_date,
            'desktop'                     AS surface,
            user_name,
            SUM(token_credits)            AS token_credits
     FROM SNOWFLAKE.ACCOUNT_USAGE.CORTEX_CODE_DESKTOP_USAGE_HISTORY
     GROUP BY 1, 3
+    UNION ALL
+    SELECT DATE_TRUNC('day', usage_time) AS usage_date,
+           'snowsight'                   AS surface,
+           user_name,
+           SUM(token_credits)            AS token_credits
+    FROM SNOWFLAKE.ACCOUNT_USAGE.CORTEX_CODE_SNOWSIGHT_USAGE_HISTORY
+    GROUP BY 1, 3
 );
+
+-- ----------------------------------------------------------------------------
+-- Other AI surfaces people spend through, each with its own usage view:
+--   * Cortex Analyst (chat over semantic models, incl. in Snowsight)
+--   * Cortex Agents (GA Feb 2026)
+--   * Cortex REST API (external apps calling Cortex LLMs directly)
+-- AISQL run from Snowsight worksheets needs no extra view — it already lands
+-- in CORTEX_FUNCTIONS_*_USAGE_HISTORY regardless of surface.
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE VIEW AI_PLATFORM_SPEND_DAILY AS
+SELECT DATE_TRUNC('day', start_time) AS usage_date,
+       'cortex_analyst'              AS source,
+       SUM(credits)                  AS credits
+FROM SNOWFLAKE.ACCOUNT_USAGE.CORTEX_ANALYST_USAGE_HISTORY
+GROUP BY 1
+UNION ALL
+SELECT DATE_TRUNC('day', start_time) AS usage_date,
+       'cortex_agents'               AS source,
+       SUM(token_credits)            AS credits
+FROM SNOWFLAKE.ACCOUNT_USAGE.CORTEX_AGENT_USAGE_HISTORY
+GROUP BY 1
+UNION ALL
+SELECT DATE_TRUNC('day', start_time) AS usage_date,
+       'cortex_rest_api'             AS source,
+       SUM(token_credits)            AS credits
+FROM SNOWFLAKE.ACCOUNT_USAGE.CORTEX_REST_API_USAGE_HISTORY
+GROUP BY 1;
 
 -- ----------------------------------------------------------------------------
 -- Cortex Search: serving is billed GB/month even at zero queries ("idle tax"),
@@ -105,7 +145,10 @@ SELECT usage_date, 'cortex_code'   AS source, SUM(token_credits) AS credits
   FROM COCO_SPEND_DAILY GROUP BY 1
 UNION ALL
 SELECT usage_date, 'cortex_search' AS source, SUM(credits)       AS credits
-  FROM CORTEX_SEARCH_SPEND_DAILY GROUP BY 1;
+  FROM CORTEX_SEARCH_SPEND_DAILY GROUP BY 1
+UNION ALL
+SELECT usage_date, source,          SUM(credits)                 AS credits
+  FROM AI_PLATFORM_SPEND_DAILY GROUP BY 1, 2;
 
 -- Sanity check after ~3h of latency:
 --   SELECT * FROM AI_SPEND_ROLLUP_DAILY ORDER BY usage_date DESC, credits DESC;

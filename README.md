@@ -13,8 +13,9 @@ behavior by default.
 
 1. **Measure before you optimize** — you cannot cut what you cannot attribute.
    `sql/01_ai_cost_observability.sql` builds per-user / per-model / per-day
-   spend views over `SNOWFLAKE.ACCOUNT_USAGE`, including CoCo CLI and desktop
-   usage.
+   spend views over `SNOWFLAKE.ACCOUNT_USAGE`, covering every surface people
+   spend through: AI SQL functions, CoCo (CLI, desktop, and Snowsight),
+   Cortex Analyst, Cortex Agents, the Cortex REST API, and Cortex Search.
 2. **Estimate before you run** — `AI_COUNT_TOKENS` (GA Jan 2026) returns the
    input-token count of a prompt *before* execution, at compute-only cost.
    `sql/02_preflight_estimation.sql` wraps it with a model pricing table into a
