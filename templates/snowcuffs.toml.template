@@ -1,0 +1,49 @@
+# snowcuffs.toml - snow-cuffs project configuration
+# Single source of truth for the operator-tunable cost gates.
+#
+# Two ways to use this file:
+#   * CocoPlus projects: merge the [snowcuffs] section into your existing
+#     cocoplus.toml and keep one config file. The hooks additionally honor
+#     cocoplus.toml [cost] per_session_threshold_credits (see below).
+#   * Standalone: copy this file to the project root as snowcuffs.toml.
+#
+# Either way, the hooks read .snowcuffs/config.json — NOT this file directly.
+# Re-render with the command at the bottom after any change, and commit both
+# the toml and .snowcuffs/config.json to git.
+
+[snowcuffs]
+# Enforcement mode for the pre-tool-use gates.
+# Rollout: week 1 "warn" (gates annotate but allow), then flip to "block"
+# once SNOWCUFFS.AUDIT.BLOCKED_EVENTS_DAILY shows the warnings are legitimate.
+mode = "warn"                # "off" | "warn" | "block"
+
+# GATE A - big-read guard. All thresholds illustrative; tune per team.
+maxReadLines = 400           # per-file line budget for Read/NotebookRead
+maxSessionReads = 8          # files readable per session before a search is required
+searchGraceReads = 8         # further reads granted after each completed search call
+
+# GATE B - batch-AI-SQL gate: $preflight approval threshold, in credits.
+# If cocoplus.toml sets [cost] per_session_threshold_credits, the hooks use
+# THAT value instead, so snow-cuffs and CocoPlus gate on the same number.
+preflightGateCredits = 5.0
+
+# Cortex Search services the gates and skills steer agents toward.
+codeSearchService = "SNOWCUFFS.CODE_INDEX.TEAM_CODE_SEARCH"
+schemaSearchService = "SNOWCUFFS.DB_CONTEXT.DB_SCHEMA_SEARCH"
+
+# ----------------------------------------------------------------------------
+# Render [snowcuffs] -> .snowcuffs/config.json (run from the project root;
+# pass cocoplus.toml instead if you merged the section there):
+#
+#   node -e '
+#   const fs = require("fs"); let sec = null; const out = {};
+#   for (const raw of fs.readFileSync(process.argv[1], "utf8").split(/\r?\n/)) {
+#     const line = raw.replace(/#.*/, "").trim(); if (!line) continue;
+#     const s = line.match(/^\[(.+)\]$/); if (s) { sec = s[1]; continue; }
+#     const kv = line.match(/^(\w+)\s*=\s*(.+?)\s*$/);
+#     if (kv && sec === "snowcuffs") { try { out[kv[1]] = JSON.parse(kv[2]); } catch (_) {} }
+#   }
+#   fs.mkdirSync(".snowcuffs", { recursive: true });
+#   fs.writeFileSync(".snowcuffs/config.json", JSON.stringify(out, null, 2) + "\n");
+#   ' snowcuffs.toml
+# ----------------------------------------------------------------------------
