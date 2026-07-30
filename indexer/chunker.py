@@ -28,6 +28,11 @@ SKIP_DIRS = {
     "target", ".terraform", ".pytest_cache", ".mypy_cache",
 }
 
+# PROJECT_CONTEXT.md is injected whole at session start by the session-start
+# hook — indexing it too would spend corpus space and re-embeds on content
+# every session already receives.
+SKIP_FILES = {"PROJECT_CONTEXT.md"}
+
 
 @dataclass(frozen=True)
 class Chunk:
@@ -85,6 +90,8 @@ def chunk_repo(repo: str, root: str | os.PathLike) -> list[Chunk]:
     for dirpath, dirnames, filenames in os.walk(root_path):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
         for name in filenames:
+            if name in SKIP_FILES:
+                continue
             path = Path(dirpath) / name
             if path.suffix.lower() not in INDEXED_EXTENSIONS:
                 continue

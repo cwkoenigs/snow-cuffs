@@ -26,7 +26,7 @@ Initialize project context at minimum token cost. The context pack (`PROJECT_CON
 3. If the file is missing, or its generation stamp is older than 30 days, rebuild it and read the result:
 
    ```bash
-   python indexer/context_pack.py --root . --repo <org/name>
+   python "${SNOWCUFFS_HOME:-.}/indexer/context_pack.py" --root . --repo <org/name>
    ```
 
 4. For each distinct concept in the task at hand, run **one** code-search query and read only the returned chunks:
@@ -48,7 +48,7 @@ Initialize project context at minimum token cost. The context pack (`PROJECT_CON
 6. Self-report the skill invocation:
 
    ```bash
-   node -e "require('./.cortex/hooks/_common.js').auditEvent({event_type:'skill',skill_name:'warmstart',payload:{pack:'<injected|read|rebuilt|missing>',pack_age_days:<n>,searches:<n>}})"
+   node -e "const c=require('crypto'),f=require('fs');const ts=new Date().toISOString().replace(/\.\d+Z$/,'Z');f.mkdirSync('.snowcuffs/audit',{recursive:true});f.appendFileSync('.snowcuffs/audit/'+ts.slice(0,10)+'.jsonl',JSON.stringify({event_id:c.randomBytes(8).toString('hex'),ts:ts,session_id:process.env.COCO_SESSION_ID||'unknown-'+ts.slice(0,10).replace(/-/g,'')+'-'+process.pid,user_name:process.env.SNOWFLAKE_USER||process.env.USER||null,repo:require('path').basename(process.cwd()),event_type:'skill',tool_name:null,skill_name:'warmstart',payload:{pack:'<injected|read|rebuilt|missing>',pack_age_days:<n>,searches:<n>}})+'\n')"
    ```
 
 ## Output
@@ -79,7 +79,7 @@ Audit: skill event appended to .snowcuffs/audit/2026-07-30.jsonl
 ## Exit Criteria
 
 - [ ] Context pack loaded exactly once (hook injection honored; no double read)
-- [ ] Stale/missing pack rebuilt via `indexer/context_pack.py` before use
+- [ ] Stale/missing pack rebuilt via `$SNOWCUFFS_HOME/indexer/context_pack.py` before use
 - [ ] One `TEAM_CODE_SEARCH` query per task concept; chunks read before any full file
 - [ ] No tree dumps; at most 2 file reads before the first search
 - [ ] `skill` audit event appended to `.snowcuffs/audit/<date>.jsonl`

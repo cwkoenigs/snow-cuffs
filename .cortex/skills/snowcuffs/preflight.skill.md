@@ -64,7 +64,7 @@ If no argument is provided and no AI SQL statement is pending in the conversatio
 9. Self-report the skill invocation to the audit trail (this is how `SNOWCUFFS.AUDIT.SKILL_ADOPTION` counts adoption):
 
    ```bash
-   node -e "require('./.cortex/hooks/_common.js').auditEvent({event_type:'skill',skill_name:'preflight',payload:{function:'<function>',model:'<model>',rows:<n_rows>,est_credits:<estimate>,gate:'<within|exceeds-approved|exceeds-stopped>'}})"
+   node -e "const c=require('crypto'),f=require('fs');const ts=new Date().toISOString().replace(/\.\d+Z$/,'Z');f.mkdirSync('.snowcuffs/audit',{recursive:true});f.appendFileSync('.snowcuffs/audit/'+ts.slice(0,10)+'.jsonl',JSON.stringify({event_id:c.randomBytes(8).toString('hex'),ts:ts,session_id:process.env.COCO_SESSION_ID||'unknown-'+ts.slice(0,10).replace(/-/g,'')+'-'+process.pid,user_name:process.env.SNOWFLAKE_USER||process.env.USER||null,repo:require('path').basename(process.cwd()),event_type:'skill',tool_name:null,skill_name:'preflight',payload:{function:'<function>',model:'<model>',rows:<n_rows>,est_credits:<estimate>,gate:'<within|exceeds-approved|exceeds-stopped>'}})+'\n')"
    ```
 
    This appends a `{"event_type":"skill","skill_name":"preflight",...}` line to `.snowcuffs/audit/<YYYY-MM-DD>.jsonl` in the shared hook/shipper contract shape.

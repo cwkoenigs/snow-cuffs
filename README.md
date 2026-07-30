@@ -29,31 +29,49 @@ behavior by default.
 4. **Guardrails** — resource monitors, alerts on daily token-credit burn, and
    budget hooks (`sql/03_guardrails.sql`) so anomalies surface in hours, not at
    month-end.
-5. **Agent behavior** — `coco/` ships project rules and a pre-flight skill so
-   CoCo (and CocoPlus workflows) search first, use the smallest capable model,
-   and estimate cost before batch jobs.
+5. **Agent behavior, enforced** — snow-cuffs is an installable CoCo plugin
+   (`plugin.json` + `.cortex/`): Node hooks that block context-stuffing reads
+   and un-estimated batch AI SQL (off → warn → block rollout), a one-shot stop
+   gate that asks for estimate-vs-actual reconciliation at handoff, and six
+   `$`-invocable skills (`$cuffs`, `$preflight`, `$dbq`, `$warmstart`,
+   `$cuffs ship`, `$cuffs chargeback`) in CocoPlus's native idiom.
 
 ## Repository layout
 
 ```
+plugin.json                      snow-cuffs as an installable CoCo plugin (entry: .cortex/)
+.cortex/
+  hooks/                         Node hooks: big-read guard + batch-AI-SQL gate
+                                 (pre-tool-use), search/AI-run tracking (post-tool-use),
+                                 context-pack injection (session-start), burn report +
+                                 one-shot stop gate (session-end, stop)
+  skills/snowcuffs/              $cuffs · $preflight · $dbq · $warmstart ·
+                                 $cuffs ship · $cuffs chargeback (CocoPlus .skill.md idiom)
+templates/
+  snowcuffs.toml.template        Config defaults (mode, budgets, service names)
+  AGENTS-snowcuffs.md.template   Standing cost rules to append to a project's AGENTS.md
 sql/
-  01_ai_cost_observability.sql   Spend attribution views (functions, search, CoCo)
+  01_ai_cost_observability.sql   Spend views: AI functions, CoCo (CLI/desktop/Snowsight),
+                                 Analyst, Agents, REST API, Search + daily rollup
   02_preflight_estimation.sql    Pricing table + ESTIMATE_AI_CREDITS() UDF
   03_guardrails.sql              Alerts, resource monitor, budget notes
-  04_code_search_service.sql     Code corpus table + Cortex Search service DDL
+  04_code_search_service.sql     Code corpus table + TEAM_CODE_SEARCH service DDL
+  05_usage_audit.sql             AGENT_EVENTS + skill-adoption/session-hygiene views
+  06_schema_context_service.sql  Schema cards + DB_SCHEMA_SEARCH service + nightly task
 indexer/
   chunker.py                     Deterministic file→chunk splitter (stable IDs)
   upsert.py                      Incremental MERGE into the corpus table
+  ship_audit.py                  Idempotent audit JSONL → SNOWCUFFS.AUDIT shipper
+  context_pack.py                PROJECT_CONTEXT.md generator (session warm-start)
 .github/workflows/
   index-codebase.yml             CI: re-index changed code on merge to main
-coco/
-  rules/cost-rules.md            Project rules for CoCo: search-first, model tiering
-  skills/preflight-cost/SKILL.md Skill: estimate credits before batch AI SQL
-  hooks/README.md                Hook patterns for token budgets in sessions
 docs/
   strategy.md                    Full assessment: search service, local index,
                                  CocoPlus, semantic layer, rollout phases
+INSTALLATION.md                  Plugin install + SQL deploy + rollout runbook
 ```
+
+See `INSTALLATION.md` for the full setup; the SQL side alone also works standalone:
 
 ## Quickstart
 

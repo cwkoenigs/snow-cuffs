@@ -76,7 +76,7 @@ Integration points with this repo:
 
 - Put `coco/rules/cost-rules.md` into the CocoPlus project rules so every
   persona inherits search-first + model tiering.
-- Register `coco/skills/preflight-cost` so plan/build phases price batch AI
+- Register the `$preflight` skill (`.cortex/skills/snowcuffs/`) so plan/build phases price batch AI
   SQL before running it.
 - Structured phases are themselves a cost feature: a spec/plan phase on a
   small-model budget prevents the expensive failure mode of a large model
@@ -94,7 +94,7 @@ compute-only cost. Alone it's trivia; the framework makes it a gate:
 - `ESTIMATE_AI_CREDITS()` turns sampled token counts + a pricing table into a
   credit number anyone can read.
 - The `preflight-cost` skill makes agents do this automatically; the batch
-  AI SQL hook (pattern 2 in `coco/hooks/README.md`) makes it unskippable.
+  AI SQL gate in `.cortex/hooks/pre-tool-use.js` makes it unskippable.
 - The 5-credit confirmation threshold is a starting point — tune it.
 
 Limits to keep in mind: input tokens only (output is your assumption), AISQL

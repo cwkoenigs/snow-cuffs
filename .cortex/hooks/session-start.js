@@ -71,7 +71,7 @@ function main() {
     ].join('\n');
   } else {
     context = 'snow-cuffs: no PROJECT_CONTEXT.md found — run $warmstart ' +
-      '(or `python indexer/context_pack.py`) to build the context pack before exploring the repo file-by-file.';
+      '(or `python "${SNOWCUFFS_HOME:-.}/indexer/context_pack.py"`) to build the context pack before exploring the repo file-by-file.';
   }
 
   auditEvent({

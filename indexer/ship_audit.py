@@ -26,6 +26,7 @@ import glob
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from typing import Iterable
 
@@ -52,12 +53,19 @@ def parse_events(lines: Iterable[str]) -> tuple[list[dict], int]:
             continue
         try:
             raw = json.loads(line)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
+            # RecursionError: pathologically nested garbage must not abort
+            # the whole ship run — it is corrupt like any other bad line.
             corrupt += 1
             continue
         if not isinstance(raw, dict) or any(
             not raw.get(f) for f in REQUIRED_FIELDS
         ):
+            corrupt += 1
+            continue
+        if iso_to_utc_naive(str(raw["ts"])) is None:
+            # A present-but-unparseable ts would ship as NULL and silently
+            # vanish from every DATE_TRUNC-grouped view in sql/05.
             corrupt += 1
             continue
         event = {f: str(raw[f]) for f in REQUIRED_FIELDS}
@@ -96,12 +104,18 @@ def ship(events: list[dict]) -> int:
     """Stage events and MERGE into TABLE. Returns rows actually inserted."""
     # Deferred import: pulls in snowflake.connector (and upsert's chunker),
     # neither of which --selftest or parse-only paths need.
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
     from upsert import connect
 
     conn = connect()
     try:
         cur = conn.cursor()
+        # connect() sets no default namespace; a dedicated CI/service user has
+        # none, and an unqualified CREATE TEMPORARY TABLE would fail with
+        # "session does not have a current database".
+        cur.execute("USE SCHEMA SNOWCUFFS.AUDIT")
         cur.execute(
             f"CREATE TEMPORARY TABLE {STAGE} ("
             "  event_id VARCHAR, ts TIMESTAMP_NTZ, session_id VARCHAR,"
@@ -148,6 +162,8 @@ def selftest() -> int:
         ' "skill_name": "preflight-cost", "payload": {"est_credits": 0.4}}',
         # corrupt: truncated JSON
         '{"event_id": "deadbeef00000000", "ts": "2026-07-30T09:16',
+        # corrupt: unparseable ts (would ship as NULL and vanish from views)
+        '{"event_id": "feedface00000000", "ts": "garbage", "event_type": "tool"}',
         # valid but missing every optional field
         '{"event_id": "0123456789abcdef", "ts": "2026-07-30T09:17:00Z",'
         ' "event_type": "session_end"}',
@@ -157,7 +173,7 @@ def selftest() -> int:
         ' "event_type": "skill", "skill_name": "preflight-cost"}',
     ]
     events, corrupt = parse_events(lines)
-    assert corrupt == 1, f"expected 1 corrupt line, got {corrupt}"
+    assert corrupt == 2, f"expected 2 corrupt lines, got {corrupt}"
     assert len(events) == 3, f"expected 3 parsed events, got {len(events)}"
 
     full = events[0]
@@ -175,12 +191,16 @@ def selftest() -> int:
     assert ts == datetime(2026, 7, 30, 9, 15) and ts.tzinfo is None
     assert iso_to_utc_naive("not-a-timestamp") is None
 
-    print("selftest ok: 3 parsed, 1 corrupt skipped, 1 duplicate deduped")
+    deep = "[" * 2000 + "]" * 2000
+    assert parse_events([deep]) == ([], 1), "deep nesting must count corrupt, not crash"
+
+    print("selftest ok: 3 parsed, 2 corrupt skipped, 1 duplicate deduped")
     return 0
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(
+        description=(__doc__ or "Ship local audit JSONL to Snowflake").splitlines()[0])
     parser.add_argument("--audit-dir", default=".snowcuffs/audit",
                         help="directory of *.jsonl audit logs")
     parser.add_argument("--user", default=None,
@@ -199,11 +219,19 @@ def main() -> int:
         print(f"nothing to ship: no *.jsonl under {args.audit_dir}")
         return 0
 
+    # Record each file's size at read time. Hooks append to today's file
+    # continuously; renaming a file that grew after we read it would archive
+    # events we never staged — permanent, silent loss. Grown files are left
+    # in place for the next run (MERGE dedupes the re-shipped prefix).
     events: list[dict] = []
     corrupt = 0
+    sizes: dict[str, int] = {}
     for path in paths:
-        with open(path, encoding="utf-8") as fh:
+        # errors="replace": a truncated multi-byte char (crash mid-write) must
+        # fail json.loads on that one line and count corrupt, not abort the run.
+        with open(path, encoding="utf-8", errors="replace") as fh:
             parsed, bad = parse_events(fh)
+        sizes[path] = os.path.getsize(path)
         events.extend(parsed)
         corrupt += bad
     if corrupt:
@@ -214,16 +242,29 @@ def main() -> int:
         e["repo"] = e["repo"] or args.repo
     events = dedupe(events)
 
-    if not events:
-        print(f"nothing to ship: 0 valid events in {len(paths)} file(s)")
-        return 0
+    if events:
+        inserted = ship(events)
+    else:
+        inserted = 0
+        print(f"no valid events in {len(paths)} file(s); archiving processed files")
 
-    inserted = ship(events)
-    for path in paths:  # only reached if the MERGE committed
-        os.rename(path, path + ".shipped")
-    print(f"shipped {len(paths)} file(s): {len(events)} events staged, "
-          f"{inserted} new rows merged into {TABLE} "
-          f"({len(events) - inserted} already present)")
+    # Archive fully-processed files (same lifecycle whether or not they held
+    # valid events — corrupt-only files must not be re-warned forever). The
+    # timestamped suffix keeps same-day re-ships from overwriting an earlier
+    # archive; the *.jsonl glob above never matches *.shipped.
+    shipped = 0
+    for path in paths:
+        try:
+            if os.path.getsize(path) != sizes[path]:
+                continue  # grew since read — leave for the next run
+        except OSError:
+            continue
+        os.replace(path, f"{path}.{int(time.time())}.shipped")
+        shipped += 1
+    if events:
+        print(f"shipped {shipped}/{len(paths)} file(s): {len(events)} events staged, "
+              f"{inserted} new rows merged into {TABLE} "
+              f"({len(events) - inserted} already present)")
     return 0
 
 

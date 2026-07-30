@@ -73,6 +73,7 @@ function main() {
     est_lines_read: state.est_lines_read,
     search_calls:   state.search_calls,
     blocks:         state.blocks,
+    ai_sql_runs:    state.ai_sql_runs || 0,
     started_at:     state.started_at,
     source:         'session-end',
   };

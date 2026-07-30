@@ -26,7 +26,7 @@ Merge the locally accumulated audit events into `SNOWCUFFS.AUDIT.AGENT_EVENTS`. 
 3. Run the shipper:
 
    ```bash
-   python indexer/ship_audit.py --audit-dir .snowcuffs/audit
+   python "${SNOWCUFFS_HOME:-.}/indexer/ship_audit.py" --audit-dir .snowcuffs/audit
    ```
 
 4. Report from the shipper's output: files shipped, rows merged (new vs duplicate — duplicates are skipped by the MERGE on `event_id`), and corrupt lines skipped. A non-zero corrupt count means an emitting hook is malformed — flag it, do not hand-edit the lines.
@@ -65,7 +65,7 @@ SNOWCUFFS.AUDIT views now reflect the ship:
 
 ## Exit Criteria
 
-- [ ] `indexer/ship_audit.py --audit-dir .snowcuffs/audit` run (or "nothing to ship" reported)
+- [ ] `$SNOWCUFFS_HOME/indexer/ship_audit.py --audit-dir .snowcuffs/audit` run (or "nothing to ship" reported)
 - [ ] Rows merged reported, split new vs duplicate; corrupt-line count reported
 - [ ] Shipped files confirmed renamed to `*.jsonl.shipped`
 - [ ] Developer reminded that SKILL_ADOPTION, SESSION_HYGIENE, and SEARCH_BYPASS_LEADERBOARD update after ship, with the sanity queries shown

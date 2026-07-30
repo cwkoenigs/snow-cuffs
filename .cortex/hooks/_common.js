@@ -57,13 +57,34 @@ function logError(hookName, message) {
 /**
  * Read all of stdin synchronously as a string.
  * Returns empty string if stdin has no data (e.g. no pipe).
+ *
+ * Reads in a retry loop rather than one fs.readFileSync(stdin.fd): large piped
+ * payloads (>~256KB) raise transient EAGAIN on non-blocking pipes, and a
+ * swallowed EAGAIN would silently bypass the gates for exactly the biggest —
+ * most expensive — events. Capped at 8MB to preserve the hook time budget.
  */
+const STDIN_MAX_BYTES = 8 * 1024 * 1024;
 function readStdin() {
   try {
-    // Only read if stdin is a pipe (not a TTY)
-    if (!process.stdin.isTTY) {
-      return fs.readFileSync(process.stdin.fd, 'utf8');
+    if (process.stdin.isTTY) return '';
+    const chunks = [];
+    const buf = Buffer.alloc(65536);
+    let total = 0;
+    for (;;) {
+      let n;
+      try {
+        n = fs.readSync(process.stdin.fd, buf, 0, buf.length, null);
+      } catch (err) {
+        if (err && (err.code === 'EAGAIN' || err.code === 'EWOULDBLOCK')) continue;
+        if (err && err.code === 'EOF') break;
+        throw err;
+      }
+      if (n === 0) break;
+      total += n;
+      if (total > STDIN_MAX_BYTES) break;
+      chunks.push(Buffer.from(buf.subarray(0, n)));
     }
+    return Buffer.concat(chunks).toString('utf8');
   } catch (_) { /* ignore */ }
   return '';
 }
@@ -107,6 +128,15 @@ function loadConfig() {
     }
   } catch (_) { /* config.json absent or malformed — defaults apply */ }
 
+  // Normalize + validate mode so "BLOCK"/"Off" don't silently downgrade to warn.
+  const mode = String(config.mode).toLowerCase();
+  if (mode === 'off' || mode === 'warn' || mode === 'block') {
+    config.mode = mode;
+  } else {
+    logError('config', `unrecognized mode "${config.mode}" — falling back to "${DEFAULT_CONFIG.mode}"`);
+    config.mode = DEFAULT_CONFIG.mode;
+  }
+
   try {
     if (fs.existsSync('cocoplus.toml')) {
       let section = null;
@@ -136,7 +166,9 @@ function sessionIdFrom(event) {
   const fromEvent = event && (event.session_id || event.sessionId);
   if (fromEvent) return String(fromEvent);
   if (process.env.COCO_SESSION_ID) return process.env.COCO_SESSION_ID;
-  return 'unknown-' + isoUtc().slice(0, 10).replace(/-/g, '');
+  // Include pid so concurrent session-id-less sessions don't share one state
+  // file (counters, grace, and the session_end dedupe flag would bleed).
+  return 'unknown-' + isoUtc().slice(0, 10).replace(/-/g, '') + '-' + process.pid;
 }
 
 /** Path of the per-session state file under .snowcuffs/state/ */
@@ -158,6 +190,8 @@ function sessionState(sessionId) {
     search_calls:             0,
     search_calls_since_flood: 0,
     blocks:                   0,
+    ai_sql_runs:              0,
+    stop_gate_fired:          false,
     session_end_recorded:     false,
   };
   try {
@@ -168,13 +202,21 @@ function sessionState(sessionId) {
   }
 }
 
-/** Persist per-session counters. Never throws. */
+/**
+ * Persist per-session counters. Never throws. Atomic (tmp + rename) so an
+ * overlapping reader never parses a truncated file and silently resets the
+ * counters to zero.
+ */
 function saveSessionState(sessionId, state) {
+  const filePath = sessionStatePath(sessionId);
+  const tmp = filePath + '.tmp.' + process.pid;
   try {
-    const filePath = sessionStatePath(sessionId);
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify(state, null, 2) + '\n', 'utf8');
-  } catch (_) { /* non-fatal */ }
+    fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + '\n', 'utf8');
+    fs.renameSync(tmp, filePath);
+  } catch (_) {
+    try { fs.unlinkSync(tmp); } catch (_2) { /* ignore */ }
+  }
 }
 
 /**
@@ -182,7 +224,11 @@ function saveSessionState(sessionId, state) {
  * shipper/SQL contract shape:
  *   {"event_id","ts","session_id","user_name","repo","event_type",
  *    "tool_name","skill_name","payload"}
- * event_id = first 16 hex chars of sha256(session_id + ts + event_type + JSON payload).
+ * event_id = first 16 hex chars of sha256 over session_id, millisecond
+ * timestamp, event_type, tool/skill names, payload, and a random nonce.
+ * The nonce guarantees same-second identical events stay distinct — the id
+ * only needs to be unique at generation time; ship_audit.py dedupes re-reads
+ * of the same line by this stored value, not by recomputing the hash.
  * Never throws; returns the record written (or null on failure).
  */
 function auditEvent(record) {
@@ -192,7 +238,9 @@ function auditEvent(record) {
     const eventType = record.event_type || 'tool';
     const payload   = record.payload || {};
     const eventId   = crypto.createHash('sha256')
-      .update(sessionId + ts + eventType + JSON.stringify(payload))
+      .update(sessionId + new Date().toISOString() + eventType
+        + (record.tool_name || '') + (record.skill_name || '')
+        + JSON.stringify(payload) + crypto.randomBytes(8).toString('hex'))
       .digest('hex')
       .slice(0, 16);
     const line = {

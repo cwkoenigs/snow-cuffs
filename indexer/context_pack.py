@@ -291,11 +291,17 @@ def detect_conventions(root: Path) -> tuple[list[str], list[str], list[str]]:
 
 def hot_files(root: Path, limit: int = HOT_FILES_LIMIT) -> list[tuple[int, str]]:
     """Top files by commit touches in the last 90 days; [] if git is absent,
-    the root is not a repo, or the log is empty. Deleted files are dropped."""
+    the root is not a repo, or the log is empty. Deleted files are dropped.
+
+    --relative scopes both the paths and the commit set to `root`, so pointing
+    --root at a subdirectory of a larger repo ranks that subtree's activity
+    (paths resolve against root) instead of falsely reporting no history.
+    Committed junk under SKIP_DIRS (e.g. __pycache__) never earns a slot.
+    """
     try:
         proc = subprocess.run(
             ["git", "-C", str(root), "log", "--since=90.days",
-             "--name-only", "--pretty=format:"],
+             "--name-only", "--pretty=format:", "--relative"],
             capture_output=True, text=True, timeout=30, check=False)
     except (OSError, subprocess.TimeoutExpired):
         return []
@@ -306,6 +312,8 @@ def hot_files(root: Path, limit: int = HOT_FILES_LIMIT) -> list[tuple[int, str]]
     ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
     out: list[tuple[int, str]] = []
     for path, n in ranked:
+        if SKIP_DIRS.intersection(Path(path).parts):
+            continue
         if not (root / path).is_file():
             continue
         out.append((n, path))
@@ -390,15 +398,32 @@ def render(
 
 # ------------------------------------------------------------------- main ---
 
+def last_commit_stamp(root: Path) -> str | None:
+    """ISO-8601 committer date of HEAD, or None outside a repo. Used as the
+    default stamp so regenerating an unchanged repo yields byte-identical
+    output — the pack lands in the code-search corpus, and a changing stamp
+    line would force a pointless re-embed of its chunk on every CI run."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "log", "-1", "--format=%cI"],
+            capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    value = proc.stdout.strip()
+    return value if proc.returncode == 0 and value else None
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(
+        description=(__doc__ or "Generate PROJECT_CONTEXT.md").splitlines()[0])
     parser.add_argument("--root", default=".", help="repo root to scan")
     parser.add_argument("--repo", default=None,
                         help="org/name label (default: root directory name)")
     parser.add_argument("--out", default=None,
                         help="output path (default: <root>/PROJECT_CONTEXT.md)")
     parser.add_argument("--stamp", default=None,
-                        help="ISO-8601 generated-at stamp (default: now, UTC)")
+                        help="ISO-8601 generated-at stamp "
+                             "(default: last commit date, else now UTC)")
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
@@ -406,11 +431,12 @@ def main() -> int:
         parser.error(f"--root {args.root!r} is not a directory")
     repo = args.repo or root.name
 
-    if args.stamp:
+    raw_stamp = args.stamp or last_commit_stamp(root)
+    if raw_stamp:
         try:
-            stamp_dt = datetime.fromisoformat(args.stamp.replace("Z", "+00:00"))
+            stamp_dt = datetime.fromisoformat(raw_stamp.replace("Z", "+00:00"))
         except ValueError:
-            parser.error(f"--stamp {args.stamp!r} is not ISO-8601")
+            parser.error(f"--stamp {raw_stamp!r} is not ISO-8601")
     else:
         stamp_dt = datetime.now(timezone.utc)
     stamp = stamp_dt.isoformat(timespec="seconds")

@@ -11,7 +11,7 @@ pricing seeds in every file are illustrative; tune before trusting.
 | 03 | `03_guardrails.sql` | Burn-rate alert, resource monitor, budgets note | Catch runaway spend in hours, not at month-end. Uses 01's rollup view. |
 | 04 | `04_code_search_service.sql` | `SNOWCUFFS.CODE_INDEX` CODE_CHUNKS, `TEAM_CODE_SEARCH`, `SNOWCUFFS_WH` | One Cortex Search service over team code so agents retrieve chunks instead of reading whole files. |
 | 05 | `05_usage_audit.sql` | `SNOWCUFFS.AUDIT` AGENT_EVENTS + skill/session/blocked views | Audit how skills and sessions are actually used: adoption, search-first hygiene, block counts, init-style cost comparison. |
-| 06 | `06_db_context.sql` | `SNOWCUFFS.DB_CONTEXT` SCHEMA_CARDS, `DB_SCHEMA_SEARCH` | Schema cards + a Cortex Search service so agents look up table shapes instead of running discovery queries. |
+| 06 | `06_schema_context_service.sql` | `SNOWCUFFS.DB_CONTEXT` SCHEMA_CARDS, `DB_SCHEMA_SEARCH` | Schema cards + a Cortex Search service so agents look up table shapes instead of running discovery queries. |
 
 ## What feeds each schema
 

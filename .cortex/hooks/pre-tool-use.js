@@ -65,11 +65,28 @@ const MISSING_FILE_EST = 200;        // assumed line count when the file is not 
  * plain `FROM <identifier>` — only the limit placement is blind, not the
  * nesting. Fixing either case would require a real SQL parser, which does not
  * fit the <100ms structural budget.
+ *
+ * String literals and comments are stripped before matching (see
+ * stripSqlNoise), so `INSERT ... SELECT '...ai_complete(...)...' FROM t`
+ * no longer false-positives and a literal containing the word "limit" no
+ * longer suppresses the gate. Identifiers quoted with embedded quotes remain
+ * a theoretical blind spot of the stripper — accepted.
  */
 const AI_FUNCTION_RE = /AI_(COMPLETE|CLASSIFY|FILTER|AGG|SUMMARIZE|EXTRACT|SENTIMENT|TRANSLATE)\s*\(/i;
 const FROM_TABLE_RE  = /\bFROM\s+(?!\()"?[A-Za-z_][A-Za-z0-9_$]*"?(\s*\.\s*"?[A-Za-z_][A-Za-z0-9_$]*"?){0,2}/i;
 const ROW_BOUND_RE   = /\b(LIMIT|SAMPLE|TOP)\b/i;
 const ESTIMATION_RE  = /\b(AI_COUNT_TOKENS|ESTIMATE_AI_CREDITS)\b/i;
+
+/**
+ * Blank out quoted string literals ('' escapes included) and SQL comments so
+ * the structural regexes match code, not prose inside strings or comments.
+ */
+function stripSqlNoise(sql) {
+  return sql
+    .replace(/'(?:[^']|'')*'/g, "''")
+    .replace(/--[^\n]*/g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ');
+}
 
 // Exactly-one-response guard: the fail-open catch below calls allow(), so the
 // helpers must be idempotent to keep stdout a single JSON object.
@@ -122,12 +139,23 @@ function countFileLines(filePath) {
 
 /** GATE A — big-read guard. Returns true when it produced the response. */
 function bigReadGuard(config, sessionId, toolName, params, ts) {
-  const filePath = params.file_path || '';
-  if (!filePath) { allow(); return true; }
+  // NotebookRead carries notebook_path in Claude-Code-family tooling; accept
+  // either so notebooks are never an uncounted bypass.
+  const filePath = params.file_path || params.notebook_path || '';
+  const state    = sessionState(sessionId);
+
+  if (!filePath) {
+    // A read tool with no recognizable path still consumes budget — allowing
+    // it uncounted would make any unrecognized param shape a full bypass.
+    state.files_read     += 1;
+    state.est_lines_read += MISSING_FILE_EST;
+    saveSessionState(sessionId, state);
+    allow();
+    return true;
+  }
 
   const counted   = countFileLines(filePath);
   const lineCount = counted === null ? MISSING_FILE_EST : counted;
-  const state     = sessionState(sessionId);
 
   const singleTooBig = lineCount > config.maxReadLines;
   const sessionFlood = state.files_read >= config.maxSessionReads;
@@ -140,9 +168,11 @@ function bigReadGuard(config, sessionId, toolName, params, ts) {
     return true;
   }
 
-  // Flood condition — a completed search grants searchGraceReads reads,
-  // consumed one per gated read here and replenished by post-tool-use.
-  if (state.search_calls_since_flood > 0) {
+  // Search grace lifts ONLY the session-flood condition — a completed search
+  // grants searchGraceReads normal-sized reads, consumed one per gated read
+  // here and replenished by post-tool-use. It never licenses an oversize
+  // whole-file read: past maxReadLines the remedy is offset/limit, always.
+  if (!singleTooBig && state.search_calls_since_flood > 0) {
     state.search_calls_since_flood -= 1;
     state.files_read     += 1;
     state.est_lines_read += lineCount;
@@ -154,12 +184,14 @@ function bigReadGuard(config, sessionId, toolName, params, ts) {
   const detail = singleTooBig
     ? `${filePath} is ~${lineCount} lines (per-file budget: ${config.maxReadLines})`
     : `${state.files_read} files already read this session (per-session budget before a search: ${config.maxSessionReads})`;
+  const remedy = singleTooBig
+    ? `Re-read only the part you need with offset/limit — oversize whole-file reads stay gated regardless of searches.`
+    : `A completed search grants another ${config.searchGraceReads} reads.`;
   const reason =
     `snow-cuffs big-read guard: ${detail}. Search before you read — run:\n` +
     `SELECT SNOWFLAKE.CORTEX.SEARCH_PREVIEW('${config.codeSearchService}', ` +
     `'{"query": "<what you are looking for>", "limit": 5}');\n` +
-    `A completed search grants another ${config.searchGraceReads} reads. ` +
-    `If you only need part of this file, re-read with offset/limit.`;
+    remedy;
 
   auditEvent({
     ts,
@@ -193,8 +225,9 @@ function bigReadGuard(config, sessionId, toolName, params, ts) {
 
 /** GATE B — batch-AI-SQL gate. Returns true when it produced the response. */
 function batchAiSqlGate(config, sessionId, params, ts) {
-  const sql = params.sql || params.query || params.statement || '';
-  if (!sql) { allow(); return true; }
+  const rawSql = params.sql || params.query || params.statement || '';
+  if (!rawSql) { allow(); return true; }
+  const sql = stripSqlNoise(rawSql);
 
   // Estimation statements are always allowed — they are the cheap path we
   // are steering toward.
@@ -210,10 +243,12 @@ function batchAiSqlGate(config, sessionId, params, ts) {
   const reason =
     'snow-cuffs batch-AI gate: this statement runs a metered Cortex AI_* function over a table ' +
     'with no LIMIT/SAMPLE/TOP bound. Run the $preflight skill first ' +
-    `(approval gate: ${config.preflightGateCredits} credits). Two-step estimate recipe:\n` +
-    `  1. SELECT COUNT(*) AS n_rows, AVG(AI_COUNT_TOKENS('<model>', <text_column>)) AS avg_tokens ` +
-    'FROM <table> SAMPLE (100 ROWS);\n' +
-    `  2. SELECT SNOWCUFFS.PUBLIC.ESTIMATE_AI_CREDITS('<model>', <n_rows>, <avg_tokens>) AS est_credits;\n` +
+    `(approval gate: ${config.preflightGateCredits} credits). Estimate recipe:\n` +
+    '  1. SELECT COUNT(*) AS n_rows FROM <table>;\n' +
+    `  2. SELECT AVG(AI_COUNT_TOKENS('<function>', <text_column>)) AS avg_in ` +
+    'FROM <table> SAMPLE (100 ROWS);  -- lowercase function name, e.g. ai_complete\n' +
+    `  3. SELECT SNOWCUFFS.PUBLIC.ESTIMATE_AI_CREDITS('<function>', '<model>', <avg_in>, ` +
+    '<assumed_output_tokens_per_row>, <n_rows>) AS estimate;\n' +
     'Estimation statements (AI_COUNT_TOKENS / ESTIMATE_AI_CREDITS) always pass this gate. ' +
     'Re-submit with a LIMIT/SAMPLE, or as-is once $preflight approves the estimate.';
 
@@ -224,8 +259,8 @@ function batchAiSqlGate(config, sessionId, params, ts) {
     event_type: 'blocked_batch_ai_sql',
     tool_name:  'SnowflakeSqlExecute',
     payload: {
-      sql_prefix: sql.slice(0, 200),
-      sql_bytes:  sql.length,
+      sql_prefix: rawSql.slice(0, 200),
+      sql_bytes:  rawSql.length,
       mode:       config.mode,
       enforced:   config.mode === 'block',
     },

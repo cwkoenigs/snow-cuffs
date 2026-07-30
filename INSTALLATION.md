@@ -51,6 +51,20 @@ Install this plugin from [cwkoenigs/snow-cuffs](https://github.com/cwkoenigs/sno
 
 Developing against a working checkout instead? Point Coco at it directly with `--plugin-dir <path-to-checkout>` and skip the copy — everything below still applies.
 
+5. Set `SNOWCUFFS_HOME` to the installed path (shell profile or Coco's env), e.g.:
+
+```bash
+export SNOWCUFFS_HOME="<user-home>/.snowflake/cortex/plugins/snowcuffs"
+```
+
+The `$warmstart` and `$cuffs ship` skills and the session-start hook invoke
+`"$SNOWCUFFS_HOME/indexer/context_pack.py"` and `".../ship_audit.py"` from
+whatever project directory the session runs in — without this variable they
+fall back to `./indexer/`, which only exists inside the snow-cuffs repo
+itself. The skills' audit self-report one-liners are deliberately
+self-contained (inline `node -e`, no plugin files referenced), so they work
+regardless of install location.
+
 After updating `settings.json`, tell the user to restart Coco so it reloads plugin settings.
 
 ## Deploy the Snowflake Objects

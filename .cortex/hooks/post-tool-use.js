@@ -56,23 +56,42 @@ function main() {
   const sessionId = sessionIdFrom(event);
 
   const paramsJson = JSON.stringify(params);
-  const haystack   = (paramsJson + JSON.stringify(result)).toUpperCase();
 
-  // 1. Search-service usage → replenish GATE A grace reads
-  const usedSearch = searchMarkers(config).some((marker) => haystack.indexOf(marker) !== -1);
-  if (usedSearch) {
-    const state = sessionState(sessionId);
-    state.search_calls             += 1;
-    state.search_calls_since_flood  = Number(config.searchGraceReads) || 0;
-    saveSessionState(sessionId, state);
-  }
-
-  // 2. 'tool' audit event for every call. ok is tri-state: true/false when the
-  // result carries a success/error signal, null when indeterminable.
+  // ok is tri-state: true/false when the result carries a success/error
+  // signal, null when indeterminable.
   let ok = null;
   if (result.success !== undefined) ok = result.success !== false;
   else if (result.error !== undefined) ok = false;
 
+  // 1. Search-service usage → replenish GATE A grace reads. Scoped tightly:
+  // only the SQL text of a SnowflakeSqlExecute counts (a Read of a file whose
+  // *name or contents* mention SEARCH_PREVIEW must not mint grace), and a
+  // result that signals failure earns nothing.
+  const sqlText    = String(params.sql || params.query || params.statement || '').toUpperCase();
+  const usedSearch =
+    toolName === 'SnowflakeSqlExecute' &&
+    ok !== false &&
+    searchMarkers(config).some((marker) => sqlText.indexOf(marker) !== -1);
+
+  // 2. AI-SQL run tracking for the stop-gate reconciliation: count executed
+  // (not blocked) statements invoking a metered AI_* function.
+  const ranAiSql =
+    toolName === 'SnowflakeSqlExecute' &&
+    ok !== false &&
+    /AI_(COMPLETE|CLASSIFY|FILTER|AGG|SUMMARIZE|EXTRACT|SENTIMENT|TRANSLATE)\s*\(/.test(sqlText) &&
+    !/\b(AI_COUNT_TOKENS|ESTIMATE_AI_CREDITS)\b/.test(sqlText);
+
+  if (usedSearch || ranAiSql) {
+    const state = sessionState(sessionId);
+    if (usedSearch) {
+      state.search_calls             += 1;
+      state.search_calls_since_flood  = Number(config.searchGraceReads) || 0;
+    }
+    if (ranAiSql) state.ai_sql_runs = (state.ai_sql_runs || 0) + 1;
+    saveSessionState(sessionId, state);
+  }
+
+  // 3. 'tool' audit event for every call.
   auditEvent({
     ts,
     session_id: sessionId,
