@@ -1,0 +1,32 @@
+# snow-cuffs standing rules — append this block to your project AGENTS.md.
+# Wording is imperative: these are instructions to the agent, not docs.
+
+## snow-cuffs Cost Governance
+
+### Retrieval before reading
+- Before opening more than 2 files, query `SNOWCUFFS.CODE_INDEX.TEAM_CODE_SEARCH`
+  (`SNOWFLAKE.CORTEX.SEARCH_PREVIEW`, limit 5) and read only the returned chunks.
+  Open a full file only when a chunk is insufficient; prefer ranged reads.
+- Never paste whole files into a prompt when a chunk answers the question.
+
+### Data questions
+- Run `$dbq` first: schema cards via `SNOWCUFFS.DB_CONTEXT.DB_SCHEMA_SEARCH`.
+  Never crawl `INFORMATION_SCHEMA` or `SHOW TABLES` across databases.
+- Prefer Cortex Analyst when a semantic model covers the domain.
+
+### Batch AI SQL
+- Run `$preflight` before any `AI_*` function over a table (not a literal).
+  Above the gate (default 5 credits) stop for explicit user confirmation.
+- Always run a `LIMIT 20` quality probe before a full-table AI run.
+
+### Model tiering
+- Default every Cortex LLM call to `SNOWCUFFS.PUBLIC.CHEAPEST_MODEL_FOR_TIER`
+  of the smallest capable tier: 'small' for classification/extraction/routing,
+  'medium' for >5k-token summarization, 'large' only for multi-step reasoning
+  or after a smaller model demonstrably failed the same task this session.
+
+### Session hygiene
+- Start with `$warmstart`; cite the context pack instead of re-deriving it.
+- Do not re-read files already in context unless they changed.
+- One precise search beats several broad ones; on long tasks, summarize
+  progress and drop stale context rather than carrying full history forward.
