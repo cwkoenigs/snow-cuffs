@@ -1,0 +1,9 @@
+{
+  "mode": "warn",
+  "maxReadLines": 400,
+  "maxSessionReads": 8,
+  "searchGraceReads": 8,
+  "preflightGateCredits": 5,
+  "codeSearchService": "SNOWCUFFS.CODE_INDEX.TEAM_CODE_SEARCH",
+  "schemaSearchService": "SNOWCUFFS.DB_CONTEXT.DB_SCHEMA_SEARCH"
+}
