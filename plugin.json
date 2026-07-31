@@ -4,7 +4,7 @@
   "description": "snow-cuffs — AI cost governance for Snowflake Cortex teams: shared code & schema retrieval enforcement, pre-flight credit gating, and full skill-usage audit",
   "author": "cwkoenigs",
   "license": "MIT",
-  "entry": ".cortex/",
+  "entry": ".cortex-plugin/",
   "minCocoVersion": "1.1.1",
   "runtime": "node",
   "skills": [

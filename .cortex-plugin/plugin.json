@@ -1,0 +1,22 @@
+{
+  "name": "snowcuffs",
+  "description": "snow-cuffs — AI cost governance for Snowflake Cortex teams: shared code & schema retrieval enforcement, pre-flight credit gating, and full skill-usage audit",
+  "version": "0.1.0",
+  "author": "cwkoenigs",
+  "license": "MIT",
+  "skills": [
+    "skills/snowcuffs/cuffs.skill.md",
+    "skills/snowcuffs/preflight.skill.md",
+    "skills/snowcuffs/dbq.skill.md",
+    "skills/snowcuffs/warmstart.skill.md",
+    "skills/snowcuffs/cuffs-ship.skill.md",
+    "skills/snowcuffs/cuffs-chargeback.skill.md"
+  ],
+  "hooks": {
+    "session-start": "hooks/session-start.js",
+    "session-end": "hooks/session-end.js",
+    "pre-tool-use": "hooks/pre-tool-use.js",
+    "post-tool-use": "hooks/post-tool-use.js",
+    "stop": "hooks/stop.js"
+  }
+}
